@@ -1,100 +1,175 @@
 /**
- * Include the Geode headers.
+ * Axiom - Geometry Dash Hack Client
+ * Built with Geode SDK
  */
 #include <Geode/Geode.hpp>
+#include <Geode/modify/PlayerObject.hpp>
+#include <Geode/modify/PlayLayer.hpp>
+#include <Geode/modify/CCScheduler.hpp>
+#include <Geode/modify/FMODAudioEngine.hpp>
+#include <Geode/modify/MenuLayer.hpp>
 
-/**
- * Brings cocos2d and all Geode namespaces to the current scope.
- */
 using namespace geode::prelude;
 
-/**
- * `$modify` lets you extend and modify GD's classes.
- * To hook a function in Geode, simply $modify the class
- * and write a new function definition with the signature of
- * the function you want to hook.
- *
- * Here we use the overloaded `$modify` macro to set our own class name,
- * so that we can use it for button callbacks.
- *
- * Notice the header being included, you *must* include the header for
- * the class you are modifying, or you will get a compile error.
- *
- * Another way you could do this is like this:
- *
- * struct MyMenuLayer : Modify<MyMenuLayer, MenuLayer> {};
- */
-#include <Geode/modify/MenuLayer.hpp>
-class $modify(MyMenuLayer, MenuLayer) {
-	/**
-	 * Typically classes in GD are initialized using the `init` function, (though not always!),
-	 * so here we use it to add our own button to the bottom menu.
-	 *
-	 * Note that for all hooks, your signature has to *match exactly*,
-	 * `void init()` would not place a hook!
-	*/
-	bool init() {
-		/**
-		 * We call the original init function so that the
-		 * original class is properly initialized.
-		 */
-		if (!MenuLayer::init()) {
-			return false;
-		}
-
-		/**
-		 * You can use methods from the `geode::log` namespace to log messages to the console,
-		 * being useful for debugging and such. See this page for more info about logging:
-		 * https://docs.geode-sdk.org/tutorials/logging
-		*/
-		log::debug("Hello from my MenuLayer::init hook! This layer has {} children.", this->getChildrenCount());
-
-		/**
-		 * See this page for more info about buttons
-		 * https://docs.geode-sdk.org/tutorials/buttons
-		*/
-		auto myButton = CCMenuItemSpriteExtra::create(
-			CCSprite::createWithSpriteFrameName("GJ_likeBtn_001.png"),
-			this,
-			/**
-			 * Here we use the name we set earlier for our modify class.
-			*/
-			menu_selector(MyMenuLayer::onMyButton)
-		);
-
-		/**
-		 * Here we access the `bottom-menu` node by its ID, and add our button to it.
-		 * Node IDs are a Geode feature, see this page for more info about it:
-		 * https://docs.geode-sdk.org/tutorials/nodetree
-		*/
-		auto menu = this->getChildByID("bottom-menu");
-		menu->addChild(myButton);
-
-		/**
-		 * The `_spr` string literal operator just prefixes the string with
-		 * your mod id followed by a slash. This is good practice for setting your own node ids.
-		*/
-		myButton->setID("my-button"_spr);
-
-		/**
-		 * We update the layout of the menu to ensure that our button is properly placed.
-		 * This is yet another Geode feature, see this page for more info about it:
-		 * https://docs.geode-sdk.org/tutorials/layouts
-		*/
-		menu->updateLayout();
-
-		/**
-		 * We return `true` to indicate that the class was properly initialized.
-		 */
-		return true;
-	}
-
-	/**
-	 * This is the callback function for the button we created earlier.
-	 * The signature for button callbacks must always be the same,
-	 * return type `void` and taking a `CCObject*`.
-	*/
-	void onMyButton(CCObject*) {
-		FLAlertLayer::create("Geode", "Hello from my custom mod!", "OK")->show();
-	}
+// ==================== NOCLIP ====================
+#include <Geode/modify/PlayerObject.hpp>
+class $modify(NoclipPlayer, PlayerObject) {
+    void pushButton(PlayerButton button) {
+        PlayerObject::pushButton(button);
+        
+        if (Mod::get()->getSettingValue<bool>("noclip")) {
+            // Make player invincible during noclip
+            m_isDead = false;
+            m_hasJustHeld = false;
+        }
+    }
+    
+    void playerDestroyed(bool p0) {
+        if (!Mod::get()->getSettingValue<bool>("noclip")) {
+            PlayerObject::playerDestroyed(p0);
+        }
+    }
 };
+
+// ==================== SPEED HACK ====================
+#include <Geode/modify/CCScheduler.hpp>
+class $modify(SpeedHackScheduler, CCScheduler) {
+    void update(float dt) {
+        float speedMultiplier = Mod::get()->getSettingValue<double>("speed-hack");
+        CCScheduler::update(dt * speedMultiplier);
+    }
+};
+
+// ==================== INSTANT COMPLETE ====================
+#include <Geode/modify/PlayLayer.hpp>
+class $modify(AxiomPlayLayer, PlayLayer) {
+    bool init(GJGameLevel* level, bool useReplay, bool dontCreateObjects) {
+        if (!PlayLayer::init(level, useReplay, dontCreateObjects)) {
+            return false;
+        }
+        
+        // Check for instant complete on level start
+        if (Mod::get()->getSettingValue<bool>("instant-complete")) {
+            this->scheduleOnce([this](float) {
+                this->playPlatformerEndAnimationToPos(
+                    CCPointMake(0, 0), 
+                    false
+                );
+            }, 0.1f, "instant_complete"_spr);
+        }
+        
+        return true;
+    }
+    
+    void levelComplete() {
+        PlayLayer::levelComplete();
+    }
+};
+
+// ==================== PRACTICE MUSIC FIX ====================
+#include <Geode/modify/FMODAudioEngine.hpp>
+class $modify(AxiomAudioEngine, FMODAudioEngine) {
+    void update(float dt) {
+        FMODAudioEngine::update(dt);
+        
+        if (Mod::get()->getSettingValue<bool>("practice-music-fix")) {
+            // Sync music with game time in practice mode
+            auto playLayer = PlayLayer::get();
+            if (playLayer && playLayer->m_isPracticeMode) {
+                float currentTime = playLayer->m_gameState.m_currentProgress;
+                // Adjust music position to match game state
+                this->setMusicTimeMS(static_cast<int>(currentTime * 1000.0f), false, 0);
+            }
+        }
+    }
+};
+
+// ==================== FPS BYPASS ====================
+#include <Geode/modify/PlayLayer.hpp>
+class $modify(FPSBypassPlayLayer, PlayLayer) {
+    void update(float dt) {
+        if (Mod::get()->getSettingValue<bool>("fps-bypass")) {
+            int targetFPS = Mod::get()->getSettingValue<int64_t>("target-fps");
+            float newDt = 1.0f / static_cast<float>(targetFPS);
+            
+            // Update physics multiple times per frame for smooth gameplay
+            int iterations = static_cast<int>(dt / newDt);
+            for (int i = 0; i < iterations; i++) {
+                PlayLayer::update(newDt);
+            }
+        } else {
+            PlayLayer::update(dt);
+        }
+    }
+};
+
+// ==================== MENU UI ====================
+#include <Geode/modify/MenuLayer.hpp>
+class $modify(AxiomMenuLayer, MenuLayer) {
+    bool init() {
+        if (!MenuLayer::init()) {
+            return false;
+        }
+
+        log::info("Axiom Hack Client initialized");
+
+        // Create Axiom button
+        auto axiomButton = CCMenuItemSpriteExtra::create(
+            CCSprite::createWithSpriteFrameName("GJ_optionsBtn_001.png"),
+            this,
+            menu_selector(AxiomMenuLayer::onAxiomButton)
+        );
+
+        auto menu = this->getChildByID("bottom-menu");
+        if (menu) {
+            menu->addChild(axiomButton);
+            axiomButton->setID("axiom-button"_spr);
+            menu->updateLayout();
+        }
+
+        return true;
+    }
+
+    void onAxiomButton(CCObject*) {
+        // Open Axiom settings
+        openSettingsPopup(Mod::get());
+    }
+};
+
+// ==================== ADDITIONAL HOOKS ====================
+
+// Anti-Cheat Bypass (for noclip)
+#include <Geode/modify/PlayerObject.hpp>
+class $modify(AntiCheatPlayer, PlayerObject) {
+    TodoReturn incrementJumps() {
+        if (Mod::get()->getSettingValue<bool>("noclip")) {
+            // Don't increment jumps in noclip mode to avoid detection
+            return;
+        }
+        PlayerObject::incrementJumps();
+    }
+};
+
+// Visual Noclip Indicator
+#include <Geode/modify/PlayLayer.hpp>
+class $modify(NoclipIndicatorPlayLayer, PlayLayer) {
+    void postUpdate(float dt) {
+        PlayLayer::postUpdate(dt);
+        
+        if (Mod::get()->getSettingValue<bool>("noclip")) {
+            // Could add visual indicator here
+            // For example, change player color or add glow effect
+        }
+    }
+};
+
+/**
+ * Axiom Hack Client Features:
+ * - Noclip: Pass through all obstacles
+ * - Speed Hack: Adjustable game speed (0.0001x - 100x)
+ * - Instant Complete: Automatically complete levels
+ * - Practice Music Fix: Sync music in practice mode
+ * - FPS Bypass: Unlock FPS up to 520
+ * 
+ * All features are configurable in the mod settings.
+ */
